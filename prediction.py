@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-
+import einops
 from data import Dataset, make_data_iter
 from helpers import calculate_dtw
 from batch import Batch
@@ -33,6 +33,7 @@ def validate_on_data(model: Model,
         valid_inputs = []
         file_paths = []
         all_dtw_scores = []
+        all_mpjpe_scores = []
 
         valid_loss = 0
         total_ntokens = 0
@@ -57,13 +58,26 @@ def validate_on_data(model: Model,
                 total_ntokens += batch.ntokens
                 total_nseqs += batch.nseqs
 
+            
             output = model.forward(src=batch.src,
                                        trg_input=batch.trg_input[:, :, :150],
                                        src_mask=batch.src_mask,
-                                       src_lengths=batch.src_lengths,
+                                    #    src_lengths=batch.src_lengths,
+                                       src_lengths=model.num_tokens,
                                        trg_mask=batch.trg_mask,
                                        is_train=False)
             
+            if not model.pretrain:
+                output, _ = output
+                # output = einops.rearrange(output, "b (t j) h -> b h t j", j=3)
+                output = model.QAE.decode(output, batch.trg_mask[...,0].sum(dim=-1).ravel())
+                output = einops.rearrange(output, "b t j h -> b t (j h)")
+            else:
+                output, body_emb, rhand_emb, lhand_emb = output
+                # output = model.QAE.decode(output, batch.trg_mask[...,0].sum(dim=-1).ravel())
+                # output = einops.rearrange(output, "b t j h -> b t (j h)")
+            # output_3d = einops.rearrange(output, 'b t (j h) -> b t j h', h=3)
+            output_3d = output
             output = torch.cat((output, batch.trg_input[:, :, 150:]), dim=-1)
             
             # Add references, hypotheses and file paths to list
@@ -77,14 +91,22 @@ def validate_on_data(model: Model,
             # Calculate the full Dynamic Time Warping score - for evaluation
             dtw_score = calculate_dtw(targets, output)
             all_dtw_scores.extend(dtw_score)
-
+            
+            # mpjpe
+            trg_mask = batch.trg_mask
+            trg_mask = trg_mask[...,0].squeeze().unsqueeze(-1).unsqueeze(-1)
+            target_3d = einops.rearrange(batch.trg_input[:, :, :150], 'b t (j h) -> b t j h', h=3)
+            output_3d = einops.rearrange(output_3d, 'b t (j h) -> b t j h', h=3)
+            mpjpe_score = torch.mean(torch.norm((output_3d * trg_mask) - (target_3d * trg_mask), dim=len(target_3d.shape)-1))
+            all_mpjpe_scores.append(np.mean(mpjpe_score.cpu().detach().numpy()))
             # Can set to only run a few batches
             # if batches == math.ceil(20/batch_size):
             #     break
             batches += 1
 
         # Dynamic Time Warping scores
-        current_valid_score = np.mean(all_dtw_scores)
+        current_valid_dtw = np.mean(all_dtw_scores)
+        current_valid_mpjpe = np.mean(np.array(all_mpjpe_scores)) * 1000
 
-    return current_valid_score, valid_loss, valid_references, valid_hypotheses, \
-           valid_inputs, all_dtw_scores, file_paths
+    return current_valid_dtw, valid_loss, valid_references, valid_hypotheses, \
+           valid_inputs, current_valid_mpjpe, file_paths

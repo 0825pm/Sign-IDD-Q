@@ -16,7 +16,7 @@ from data import load_data, make_data_iter
 from model import build_model, Model
 from torch.utils.tensorboard import SummaryWriter
 from constants import TARGET_PAD
-from loss import Loss, LatentLoss
+from loss import Loss
 from builders import build_gradient_clipper, build_optimizer, build_scheduler
 from plot_videos import plot_video, alter_DTW_timing
 from prediction import validate_on_data
@@ -57,11 +57,7 @@ class TrainManager:
         self.target_pad = TARGET_PAD
 
         # New loss - depending on config
-        self.pretrain = train_config["pretrain"]
-        if self.pretrain:
-            self.loss = Loss(cfg = config, target_pad=self.target_pad)
-        else:
-            self.loss = LatentLoss(cfg = config, target_pad=self.target_pad)
+        self.loss = Loss(cfg = config, target_pad=self.target_pad)
 
         # normal
         self.normalization = "batch"
@@ -289,12 +285,11 @@ class TrainManager:
 
                 # validate on the entire dev set
                 if self.steps % self.validation_freq == 0 and update:
-                # if True:
 
                     valid_start_time = time.time()
 
                     valid_score, valid_loss, valid_references, valid_hypotheses, \
-                        valid_inputs, valid_mpjpe, valid_file_paths = \
+                        valid_inputs, all_dtw_scores, valid_file_paths = \
                         validate_on_data(
                             batch_size=self.eval_batch_size,
                             data=valid_data,
@@ -311,14 +306,13 @@ class TrainManager:
                     # Tensorboard writer
                     self.tb_writer.add_scalar("valid/valid_loss", valid_loss, self.steps)
                     self.tb_writer.add_scalar("valid/valid_score", valid_score, self.steps)
-                    self.tb_writer.add_scalar("valid/valid_score", valid_mpjpe, self.steps)
 
                     if self.early_stopping_metric == "loss":
                         ckpt_score = valid_loss
                     elif self.early_stopping_metric == "dtw":
                         ckpt_score = valid_score
                     else:
-                        ckpt_score = valid_mpjpe
+                        ckpt_score = valid_score
 
                     new_best = False
                     self.best = False
@@ -362,9 +356,8 @@ class TrainManager:
                     total_valid_duration += valid_duration
                     self.logger.info(
                         'Validation result at epoch %3d, step %8d: Val DTW Score: %6.2f, '
-                        'Val MPJPE Score: %6.2f, '
                         'loss: %8.4f,  duration: %.4fs',
-                            epoch_no+1, self.steps, valid_score, valid_mpjpe,
+                            epoch_no+1, self.steps, valid_score,
                             valid_loss, valid_duration)
 
                 if self.stop:

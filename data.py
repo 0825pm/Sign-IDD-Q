@@ -13,7 +13,8 @@ import torch
 from constants import UNK_TOKEN, PAD_TOKEN, TARGET_PAD
 from vocabulary import build_vocab, Vocabulary
 
-def load_data(cfg: dict) -> (Dataset, Dataset, Optional[Dataset], Vocabulary, Vocabulary):
+# def load_data(cfg: dict) -> (Dataset, Dataset, Optional[Dataset], Vocabulary, Vocabulary):
+def load_data(cfg: dict):
     data_cfg = cfg["data"]
     # Source, Target and Files postfixes
     src_lang = data_cfg["src"]

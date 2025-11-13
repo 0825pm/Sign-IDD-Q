@@ -10,7 +10,7 @@ def main():
     # Choose between Train and Test
     ap.add_argument("mode", choices=["train", "test"], help="train a model or test")
     # Path to Config
-    ap.add_argument("config_path", default="./Configs/Sign-IDD.yaml", type=str, help="path to YAML config file")
+    ap.add_argument("config_path", default="./Configs/Sign-IDD-QAE.yaml", type=str, help="path to YAML config file")
 
     # Optional path to checkpoint
     ap.add_argument("--ckpt", type=str, help="path to model checkpoint")
