@@ -12,6 +12,7 @@ from embeddings import Embeddings
 from vocabulary import Vocabulary
 from initialization import initialize_model
 from constants import PAD_TOKEN, EOS_TOKEN, BOS_TOKEN, TARGET_PAD
+import torch.nn.functional as F
 
 class Model(nn.Module):
     def __init__(self,cfg: dict, 
@@ -173,7 +174,8 @@ class Model(nn.Module):
             pose_output, body_emb, rhand_emb, lhand_emb = skel_out
             batch_loss = loss_function(pose_output, batch.trg_input[:, :, :150])
         else:
-            batch_loss = loss_function(skel_out[0], skel_out[1])
+            # batch_loss = loss_function(skel_out[0], skel_out[1])
+            batch_loss = F.l1_loss(skel_out[0].contiguous(), skel_out[1].contiguous())
 
         # return batch loss = sum over all elements in batch that are not pad
         return batch_loss

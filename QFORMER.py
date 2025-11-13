@@ -34,10 +34,9 @@ class QFormer(nn.Module):
         )
 
         self.head = nn.Sequential(
-            # nn.LayerNorm(embed_dim*8),
+            nn.LayerNorm(embed_dim),  # <-- 이 줄을 추가 (혹은 주석 해제)
             nn.Linear(embed_dim, embed_dim),
         )
-        
 
     def forward(self, x, query_token, pos_embed_token):
 
