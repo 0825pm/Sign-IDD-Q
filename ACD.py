@@ -216,4 +216,3 @@ class ACD(nn.Module):
             ts.append(d_t)
 
         return torch.stack(diffused_poses), torch.stack(noises), torch.stack(ts)
-

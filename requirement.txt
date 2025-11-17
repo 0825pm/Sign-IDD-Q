@@ -28,5 +28,6 @@ tensorboard-data-server==0.7.2
 tinycss2==1.2.1
 torch==2.4.1
 torchvision
-torchtext
+torchtext==0.4.0
 tqdm==4.64.1
+opencv-python==4.11.0.86

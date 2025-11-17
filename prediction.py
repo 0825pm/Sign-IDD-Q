@@ -62,21 +62,11 @@ def validate_on_data(model: Model,
             output = model.forward(src=batch.src,
                                        trg_input=batch.trg_input[:, :, :150],
                                        src_mask=batch.src_mask,
-                                    #    src_lengths=batch.src_lengths,
                                        src_lengths=model.num_tokens,
                                        trg_mask=batch.trg_mask,
-                                       is_train=False)
+                                       is_train=False) # 추론 모드
             
-            if not model.pretrain:
-                output, _ = output
-                # output = einops.rearrange(output, "b (t j) h -> b h t j", j=3)
-                output = model.QAE.decode(output, batch.trg_mask[...,0].sum(dim=-1).ravel())
-                output = einops.rearrange(output, "b t j h -> b t (j h)")
-            else:
-                output, body_emb, rhand_emb, lhand_emb = output
-                # output = model.QAE.decode(output, batch.trg_mask[...,0].sum(dim=-1).ravel())
-                # output = einops.rearrange(output, "b t j h -> b t (j h)")
-            # output_3d = einops.rearrange(output, 'b t (j h) -> b t j h', h=3)
+
             output_3d = output
             output = torch.cat((output, batch.trg_input[:, :, 150:]), dim=-1)
             

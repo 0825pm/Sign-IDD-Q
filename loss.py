@@ -57,52 +57,6 @@ class Loss(nn.Module):
             loss = loss * self.loss_scale
 
         return loss
-    
-class LatentLoss(nn.Module):
-
-    def __init__(self, cfg, target_pad=0.0):
-        super(LatentLoss, self).__init__()
-
-        self.loss = cfg["training"]["loss"].lower()
-        self.bone_loss = cfg["training"]["bone_loss"].lower()
-
-        if self.loss == "l1":
-            self.criterion = nn.L1Loss()
-        elif self.loss == "mse":
-            self.criterion = nn.MSELoss()
-        else:
-            print("Loss not found - revert to default L1 loss")
-            self.criterion = nn.L1Loss()
-
-        if self.bone_loss == "l1":
-            self.criterion_bone = nn.L1Loss()
-        elif self.bone_loss == "mse":
-            self.criterion_bone = nn.MSELoss()
-        else:
-            print("Loss not found - revert to default MSE loss")
-            self.criterion_bone = nn.MSELoss()
-
-        model_cfg = cfg["model"]
-
-        self.target_pad = target_pad
-        self.loss_scale = model_cfg.get("loss_scale", 1.0)
-
-    def forward(self, preds, targets):
-
-        loss_mask = (targets != self.target_pad)
-
-        # Find the masked predictions and targets using loss mask
-        preds_masked = preds * loss_mask
-        targets_masked = targets * loss_mask
-
-        # Calculate loss just over the masked predictions
-        loss = self.criterion(preds_masked, targets_masked)
-
-        # Multiply loss by the loss scale
-        if self.loss_scale != 1.0:
-            loss = loss * self.loss_scale
-
-        return loss
 
 def get_length_direct(trg):
     trg_reshaped = trg.view(trg.shape[0], trg.shape[1], 50, 3)

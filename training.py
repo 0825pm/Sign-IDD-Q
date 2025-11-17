@@ -16,7 +16,7 @@ from data import load_data, make_data_iter
 from model import build_model, Model
 from torch.utils.tensorboard import SummaryWriter
 from constants import TARGET_PAD
-from loss import Loss, LatentLoss
+from loss import Loss
 from builders import build_gradient_clipper, build_optimizer, build_scheduler
 from plot_videos import plot_video, alter_DTW_timing
 from prediction import validate_on_data
@@ -57,11 +57,9 @@ class TrainManager:
         self.target_pad = TARGET_PAD
 
         # New loss - depending on config
-        self.pretrain = train_config["pretrain"]
-        if self.pretrain:
-            self.loss = Loss(cfg = config, target_pad=self.target_pad)
-        else:
-            self.loss = LatentLoss(cfg = config, target_pad=self.target_pad)
+
+        self.recon_loss_weight = train_config.get("recon_loss_weight", 10.0)
+        self.loss = Loss(cfg = config, target_pad=self.target_pad)
 
         # normal
         self.normalization = "batch"

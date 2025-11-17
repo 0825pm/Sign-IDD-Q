@@ -54,12 +54,14 @@ class Model(nn.Module):
 
         self.in_trg_size = in_trg_size
         self.out_trg_size = out_trg_size
+        
         self.pretrain = cfg["training"]["pretrain"]
 
         if not self.pretrain:
             for name, param in self.QAE.named_parameters():
                 param.requires_grad = False
             self.QAE.eval()
+
         
     def forward(self, is_train: bool, src: Tensor, trg_input: Tensor, src_mask: Tensor, src_lengths: Tensor, trg_mask: Tensor):
 
@@ -79,7 +81,6 @@ class Model(nn.Module):
         if len(trg_input.shape) == 3:
             trg_input = einops.rearrange(trg_input, "b t (j h) -> b t j h", h=3)
         
-       
         if self.pretrain:
             body_feat, rhand_feat, lhand_feat = self.QAE.encode_pose(pose_input=trg_input,
                                                   pose_length=trg_mask[...,0].sum(dim=-1).ravel())
@@ -87,31 +88,36 @@ class Model(nn.Module):
             # qae_encoder_output, "b h t n -> b (t n) h")
             pose_output = self.QAE.decode(qae_encoder_output, trg_mask[...,0].sum(dim=-1).ravel())
             pose_output = einops.rearrange(pose_output, "b t j h -> b t (j h)")
-            return (pose_output, body_emb, rhand_emb, lhand_emb)
+            return pose_output
         else:
             with torch.no_grad():
                 body_feat, rhand_feat, lhand_feat = self.QAE.encode_pose(pose_input=trg_input,
                                                   pose_length=trg_mask[...,0].sum(dim=-1).ravel())
                 qae_encoder_output, body_emb, rhand_emb, lhand_emb = self.QAE.qformer(body_feat, rhand_feat, lhand_feat)
-        # Encode the source sequence
+                
         encoder_output = self.encode(src=src,
                                      src_length=src_lengths,
                                      src_mask=src_mask)
         
         # Diffusion the target sequence
-        trg_input = qae_encoder_output.detach().clone()
+        latent_target = qae_encoder_output
         # trg_input = einops.rearrange(trg_input, "b h t j -> b (t j) h")
         B, H, T, J = trg_input.shape
-        trg_mask = torch.ones(B, 1, T*J, T*J, dtype=torch.bool, device=trg_input.device)
+        diff_trg_mask = torch.ones(B, 1, T*J, T*J, dtype=torch.bool, device=trg_input.device)
         # trg_mask = None
                                 
         diffusion_output = self.diffusion(is_train=is_train,
                                           encoder_output=encoder_output,
-                                          trg_input=trg_input, # Original
+                                          trg_input=latent_target, # Original
                                           src_mask=src_mask,
-                                          trg_mask=trg_mask)
+                                          trg_mask=diff_trg_mask)
+        
+        
+        # with torch.no_grad():
+        pose_output = self.QAE.decode(diffusion_output, trg_mask[...,0].sum(dim=-1).ravel())
+        pose_output = einops.rearrange(pose_output, "b t j h -> b t (j h)")
 
-        return (diffusion_output, trg_input)
+        return pose_output
 
     def encode(self, src: Tensor, src_length: Tensor, src_mask: Tensor):
 
@@ -161,23 +167,33 @@ class Model(nn.Module):
         :return: batch_loss: sum of losses over non-pad elements in the batch
         """
         # Forward through the batch input
+        # get_loss_for_batch는 학습 중에만 호출되므로 is_train=True로
+        # forward를 호출하여 3개의 텐서를 받음
         skel_out = self.forward(src=batch.src,
                                 trg_input=batch.trg_input[:, :, :150],
                                 src_mask=batch.src_mask,
-                                # src_lengths=batch.src_lengths, # Original
-                                src_lengths=self.num_tokens, # QAE
+                                src_lengths=self.num_tokens,
                                 trg_mask=batch.trg_mask,
-                                is_train=is_train)
+                                is_train=True) # 학습 모드로 강제
 
-        # compute batch loss using skel_out and the batch target
-        if self.pretrain:
-            pose_output, body_emb, rhand_emb, lhand_emb = skel_out
-            batch_loss = loss_function(pose_output, batch.trg_input[:, :, :150])
-        else:
-            # batch_loss = loss_function(skel_out[0], skel_out[1])
-            batch_loss = F.l1_loss(skel_out[0].contiguous(), skel_out[1].contiguous())
+        # 'pretrain' 플래그 분기 제거
+        
+        # diffusion_pred, latent_target, pose_recon = skel_out
+        diffusion_pred = skel_out
 
-        # return batch loss = sum over all elements in batch that are not pad
+        # E2E 손실 계산
+        # 1. 확산 손실 (Diffusion Loss)
+        # loss_diffusion = F.l1_loss(diffusion_pred.contiguous(), latent_target.contiguous())
+
+        # 2. 재구성 손실 (Reconstruction Loss)
+        #    loss_function은 training.py에서 전달된 self.loss (즉, Loss 클래스 인스턴스)임
+        loss_recon = loss_function(diffusion_pred, batch.trg_input[:, :, :150])
+
+        # print(f"DEBUG E2E Loss --> Diff: {loss_diffusion.item():.6f} | Recon: {loss_recon.item():.6f} (Weight: {self.recon_loss_weight})")
+        
+        # 3. 두 손실을 가중합
+        batch_loss = loss_recon
+
         return batch_loss
 
 def build_model(cfg: dict, src_vocab: Vocabulary, trg_vocab: Vocabulary):
