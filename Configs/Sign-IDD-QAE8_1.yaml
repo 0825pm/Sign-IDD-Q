@@ -28,7 +28,7 @@ training:
     validation_freq: 2000 # After how many steps to run a validation on the model
     logging_freq: 250  # After how many steps to log training progress
     eval_metric: "dtw"  # Evaluation metric during training (dtw','bt','mpjpe')
-    model_dir: "./Models/token8_phase1_new" # Where the model shall be stored
+    model_dir: "./Models/token8_phase1_vae" # Where the model shall be stored
     overwrite: False # Flag to overwrite a previous saved model in the model_dir
     continue: True  # Flag to continue from a previous saved model in the model_dir
     shuffle: True  # Flag to shuffle the data during training
@@ -49,7 +49,7 @@ model:
     noise_rate: 5 # Gaussian Noise rate
     future_prediction: 0 # Future Prediction Data Augmentation if > 0
     qae:
-        depth: 1 # Number of layers
+        depth: 2 # Number of layers
         num_heads: 8  # Number of Heads
         num_tokens: 8 # Number of Tokens for Qformer
         hidden_size: 64 # Hidden Size Dimension
@@ -81,3 +81,12 @@ model:
         embeddings:
           embedding_dim: 512 # Embedding Dimension
           dropout: 0.1 # Embedding Dropout
+    streamer:
+        dim_model: 64
+        text_embed_dim: 768
+        n_layers: 2
+        n_heads: 4
+        n_kv_heads: 4
+        hidden_dim: 256
+
+

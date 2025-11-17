@@ -67,6 +67,7 @@ def validate_on_data(model: Model,
                                        is_train=False) # 추론 모드
             
 
+            output, body_mu, body_log_var, rhand_mu, rhand_log_var, lhand_mu, lhand_log_var = output
             output_3d = output
             output = torch.cat((output, batch.trg_input[:, :, 150:]), dim=-1)
             

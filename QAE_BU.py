@@ -3,7 +3,6 @@ import torch.nn as nn
 import math
 import einops
 from QFORMER import QFormer
-from sentence_transformers import SentenceTransformer
     
 
 class BertLayerNorm(nn.Module):
@@ -206,6 +205,7 @@ class QAE(nn.Module):
         self.enc_spa_vit = Encoder(dim=embed_dim, depth=depth, heads=num_heads, mlp_dim=hidden_dim, dropout=0.1)
         self.enc_tem_vit = Encoder(dim=embed_dim, depth=depth, heads=num_heads, mlp_dim=hidden_dim, dropout=0.1)
         
+        # --- VAE 변경: QFormer 출력을 mu와 log_var로 변환하는 레이어 추가 ---
         self.body_to_mu = nn.Linear(embed_dim, embed_dim)
         self.body_to_log_var = nn.Linear(embed_dim, embed_dim)
         
@@ -214,6 +214,7 @@ class QAE(nn.Module):
         
         self.lhand_to_mu = nn.Linear(embed_dim, embed_dim)
         self.lhand_to_log_var = nn.Linear(embed_dim, embed_dim)
+        # --- VAE 변경 끝 ---
         
         self.pose_query = nn.Parameter(torch.zeros(1, self.num_tokens, embed_dim))
         self.pose_query.data.normal_(mean=0.0, std=0.02)
@@ -257,14 +258,7 @@ class QAE(nn.Module):
         self.dec_token = nn.Parameter(torch.zeros(1, cfg["data"]["max_sent_length"], embed_dim))
         # 5. SPL (Structured Prediction Layer)
         self.pose_spl = SPL(input_size=embed_dim, hidden_layers=5, hidden_units=embed_dim, joint_size=3, SKELETON="sign_pose")
-        self.hand_spl = SPL(input_size=embed_dim, hidden_layers=5, hidden_units=embed_dim, joint_size=3, SKELETON="sign_hand")
-        
-        self.txt_model = SentenceTransformer('sentencet5-xxl/')
-        self.txt_model.eval()
-        for p in self.txt_model.parameters():
-            p.requires_grad = False
-        
-        self.text_projector = nn.Linear(768, embed_dim)
+        self.hand_spl = SPL(input_size=embed_dim, hidden_layers=5, hidden_units=embed_dim, joint_size=3, SKELETON="sign_hand")        
     
     def _get_mask(self, x_len, size, device):
         pos = torch.arange(0, size, device=device).unsqueeze(0).repeat(x_len.size(0), 1)
@@ -276,6 +270,7 @@ class QAE(nn.Module):
         std = torch.exp(0.5 * log_var)
         eps = torch.randn_like(std)
         return mu + eps * std
+    # --- VAE 변경 끝 ---
     
     def encode_pose(self, pose_input, pose_length):
         B, T, N, C = pose_input.shape
@@ -313,16 +308,20 @@ class QAE(nn.Module):
         return body_feat, rhand_feat, lhand_feat
 
     def encode_text(self, text_input, device):
-        text_embeddings = self.txt_model.encode(
-            text_input,
-            convert_to_tensor=True,
-            show_progress_bar=False,
-            device=device
-        )
-        
-        # T5 차원 -> QAE 잠재 차원으로 프로젝션
-        # projected_embeddings = self.text_projector(text_embeddings)
-        return text_embeddings
+        input_tokens = self.tokenizer(
+                text_input,
+                padding="max_length",
+                truncation=True,
+                max_length=77,
+                return_tensors="pt"
+            ).to(device)
+
+        input_ids = input_tokens["input_ids"].to(device)
+        attention_mask = input_tokens["attention_mask"].to(device)
+
+        txt_logits = self.txt_model(input_ids=input_ids, attention_mask=attention_mask)[0]
+        output = txt_logits[torch.arange(txt_logits.shape[0]), (input_ids == self.tokenizer.eos_token_id).long().argmax(dim=-1)]
+        return self.lm_head(output)
     
     def decode(self, quantized_feat, pose_length):
         B, C, T, N_parts = quantized_feat.shape
@@ -372,42 +371,10 @@ class QAE(nn.Module):
         rhand_emb = self.rhand_qformer(rhand_feat, rhand_query, self.rhand_pos_emb)
         lhand_emb = self.lhand_qformer(lhand_feat, lhand_query, self.lhand_pos_emb)
         
-        # 1. 각 부분(body, rhand, lhand)에 대해 mu와 log_var 계산
-        body_mu = self.body_to_mu(body_emb)
-        body_log_var = self.body_to_log_var(body_emb)
-        
-        rhand_mu = self.rhand_to_mu(rhand_emb)
-        rhand_log_var = self.rhand_to_log_var(rhand_emb)
-        
-        lhand_mu = self.lhand_to_mu(lhand_emb)
-        lhand_log_var = self.lhand_to_log_var(lhand_emb)
-        
-        # 2. 리파라미터화 트릭 적용
-        body_z = self.reparameterize(body_mu, body_log_var)
-        rhand_z = self.reparameterize(rhand_mu, rhand_log_var)
-        lhand_z = self.reparameterize(lhand_mu, lhand_log_var)
-        
-        quantized_feat = torch.cat([body_z.unsqueeze(-1), rhand_z.unsqueeze(-1), lhand_z.unsqueeze(-1)], dim=-1).permute(0, 2, 1, 3).contiguous()
+        quantized_feat = torch.cat([body_emb.unsqueeze(-1), rhand_emb.unsqueeze(-1), lhand_emb.unsqueeze(-1)], dim=-1).permute(0, 2, 1, 3).contiguous()
 
-        return quantized_feat, body_mu, body_log_var, rhand_mu, rhand_log_var, lhand_mu, lhand_log_var
-    
-    def encode_for_streamer(self, pose_input, text_input, pose_length):
-        """
-        Streamer 학습(2단계)을 위해 텍스트와 포즈 잠재 벡터(mu)를 인코딩합니다.
-        (QFormer의 출력을 VAE reparameterize를 통해 mu로 변환)
-        """
-        device = pose_input.device
+        return quantized_feat, body_emb, rhand_emb, lhand_emb
         
-        # 1. Pose Encoding (QFormer -> VAE mu)
-        body_feat, rhand_feat, lhand_feat = self.encode_pose(pose_input, pose_length)
-        _, body_mu, body_log_var, rhand_mu, rhand_log_var, lhand_mu, lhand_log_var = self.qformer(body_feat, rhand_feat, lhand_feat)
-       
-        z_sequence = torch.cat([body_mu, rhand_mu, lhand_mu], dim=1)
-        
-        text_feat_projected = self.encode_text(text_input, device)
-        
-        return z_sequence, text_feat_projected
-    
     def forward(self, pose_input, text_input, text_ids, pose_target, pose_length, mask, pool_mask, test=False):
         B, T, N, C = pose_input.shape
         device = pose_input.device

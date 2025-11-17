@@ -84,16 +84,16 @@ class Model(nn.Module):
         if self.pretrain:
             body_feat, rhand_feat, lhand_feat = self.QAE.encode_pose(pose_input=trg_input,
                                                   pose_length=trg_mask[...,0].sum(dim=-1).ravel())
-            qae_encoder_output, body_emb, rhand_emb, lhand_emb = self.QAE.qformer(body_feat, rhand_feat, lhand_feat)
+            qae_encoder_output, body_mu, body_log_var, rhand_mu, rhand_log_var, lhand_mu, lhand_log_var = self.QAE.qformer(body_feat, rhand_feat, lhand_feat)
             # qae_encoder_output, "b h t n -> b (t n) h")
             pose_output = self.QAE.decode(qae_encoder_output, trg_mask[...,0].sum(dim=-1).ravel())
             pose_output = einops.rearrange(pose_output, "b t j h -> b t (j h)")
-            return pose_output
+            return pose_output, body_mu, body_log_var, rhand_mu, rhand_log_var, lhand_mu, lhand_log_var
         else:
             with torch.no_grad():
                 body_feat, rhand_feat, lhand_feat = self.QAE.encode_pose(pose_input=trg_input,
                                                   pose_length=trg_mask[...,0].sum(dim=-1).ravel())
-                qae_encoder_output, body_emb, rhand_emb, lhand_emb = self.QAE.qformer(body_feat, rhand_feat, lhand_feat)
+                qae_encoder_output, body_mu, body_log_var, rhand_mu, rhand_log_var, lhand_mu, lhand_log_var = self.QAE.qformer(body_feat, rhand_feat, lhand_feat)
                 
         encoder_output = self.encode(src=src,
                                      src_length=src_lengths,
@@ -117,7 +117,7 @@ class Model(nn.Module):
         pose_output = self.QAE.decode(diffusion_output, trg_mask[...,0].sum(dim=-1).ravel())
         pose_output = einops.rearrange(pose_output, "b t j h -> b t (j h)")
 
-        return pose_output
+        return pose_output, body_mu, body_log_var, rhand_mu, rhand_log_var, lhand_mu, lhand_log_var
 
     def encode(self, src: Tensor, src_length: Tensor, src_mask: Tensor):
 
@@ -179,7 +179,7 @@ class Model(nn.Module):
         # 'pretrain' 플래그 분기 제거
         
         # diffusion_pred, latent_target, pose_recon = skel_out
-        diffusion_pred = skel_out
+        diffusion_pred, body_mu, body_log_var, rhand_mu, rhand_log_var, lhand_mu, lhand_log_var = skel_out
 
         # E2E 손실 계산
         # 1. 확산 손실 (Diffusion Loss)
@@ -188,11 +188,17 @@ class Model(nn.Module):
         # 2. 재구성 손실 (Reconstruction Loss)
         #    loss_function은 training.py에서 전달된 self.loss (즉, Loss 클래스 인스턴스)임
         loss_recon = loss_function(diffusion_pred, batch.trg_input[:, :, :150])
+        
+        kld_body = -0.5 * torch.sum(1 + body_log_var - body_mu.pow(2) - body_log_var.exp(), dim=[1, 2]).mean()
+        kld_rhand = -0.5 * torch.sum(1 + rhand_log_var - rhand_mu.pow(2) - rhand_log_var.exp(), dim=[1, 2]).mean()
+        kld_lhand = -0.5 * torch.sum(1 + lhand_log_var - lhand_mu.pow(2) - lhand_log_var.exp(), dim=[1, 2]).mean()
+        
+        latent_loss = kld_body + kld_rhand + kld_lhand
 
         # print(f"DEBUG E2E Loss --> Diff: {loss_diffusion.item():.6f} | Recon: {loss_recon.item():.6f} (Weight: {self.recon_loss_weight})")
         
         # 3. 두 손실을 가중합
-        batch_loss = loss_recon
+        batch_loss = loss_recon + latent_loss * 1e-5
 
         return batch_loss
 
